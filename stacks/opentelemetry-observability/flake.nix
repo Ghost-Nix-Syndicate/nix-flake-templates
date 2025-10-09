@@ -1,5 +1,5 @@
 {
-  description = "Modular Nix-based OpenTelemetry Observability Stack for k3d";
+  description = "Full observability stack (OTEL + Jaeger + Prometheus + Grafana) for k3s";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
@@ -11,73 +11,51 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        kx = kubenix.lib { inherit pkgs; };
+        kx = kubenix;
 
-        namespace = "observability";
-
-        # Import all module definitions
-        grafana = import ./modules/grafana.nix { inherit kx namespace pkgs; };
-        prometheus = import ./modules/prometheus.nix { inherit kx namespace; };
-        loki = import ./modules/loki.nix { inherit kx namespace; };
-        tempo = import ./modules/tempo.nix { inherit kx namespace; };
-        otelCollector = import ./modules/otel-collector.nix { inherit kx namespace; };
-        otelAgent = import ./modules/otel-agent.nix { inherit kx namespace; };
-        serviceMonitors = import ./modules/service-monitors.nix { inherit kx namespace; };
-
-        manifests = kx.build.resources [
-          grafana
-          prometheus
-          loki
-          tempo
-          otelCollector
-          otelAgent
-          serviceMonitors
-        ];
-
-        manifestsYaml = pkgs.writeText "observability.yaml"
-          (builtins.toJSON manifests);
-      in {
-        packages.manifests = manifestsYaml;
-
+        # K8s manifests
+        collectorConfig = ./collector-config.yaml;
+        k8s = {
+          otelCollector = kx.deployment { ... };
+          jaeger = kx.deployment { ... };
+          prometheus = kx.deployment { ... };
+          grafana = kx.deployment { ... };
+        };
+      in
+      {
         devShells.default = pkgs.mkShell {
-          name = "observability-devshell";
-          buildInputs = [
-            pkgs.k3d
-            pkgs.kubectl
-            pkgs.helm
-            pkgs.k9s
-            pkgs.yq
-            pkgs.opentelemetry-collector-contrib
-          ];
+          buildInputs = [ pkgs.k3s pkgs.kubectl pkgs.helm pkgs.curl ];
+
           shellHook = ''
-            echo "🚀 Use 'nix run .#deploy' to start the observability stack."
-            echo "🧹 Use 'nix run .#destroy' to tear it down."
-          '';
-        };
-
-        apps.deploy = flake-utils.lib.mkApp {
-          drv = pkgs.writeShellScriptBin "deploy" ''
-            set -e
-            if ! k3d cluster list | grep -q observability; then
-              echo "Creating k3d cluster..."
-              k3d cluster create observability --servers 1 --agents 2 --port "30000:30000@loadbalancer"
+            export KUBECONFIG=/tmp/k3s.yaml
+            if ! pgrep -x k3s >/dev/null; then
+              echo "🚀 Starting k3s..."
+              sudo k3s server --write-kubeconfig=$KUBECONFIG &
+              sleep 5
             fi
-
-            kubectl create namespace ${namespace} --dry-run=client -o yaml | kubectl apply -f -
-            echo "📦 Deploying OpenTelemetry stack..."
-            cat ${manifestsYaml} | yq -P | kubectl apply -f -
-            echo "✅ Deployed! Grafana available at http://localhost:30000 (admin / admin)"
+            echo "📡 Dev k3s cluster ready"
           '';
         };
 
-        apps.destroy = flake-utils.lib.mkApp {
-          drv = pkgs.writeShellScriptBin "destroy" ''
-            set -e
-            echo "🧹 Removing observability stack..."
-            kubectl delete ns ${namespace} --ignore-not-found
-            echo "💥 Deleting k3d cluster..."
-            k3d cluster delete observability || true
-          '';
-        };
-      });
+        k8s = k8s;
+
+        defaultApp = pkgs.writeShellScriptBin "deploy" ''
+          echo "📦 Deploying observability stack..."
+          ${kubenix.kubectl} apply -f <(kubenix.writeYaml ${k8s.otelCollector})
+          ${kubenix.kubectl} apply -f <(kubenix.writeYaml ${k8s.jaeger})
+          ${kubenix.kubectl} apply -f <(kubenix.writeYaml ${k8s.prometheus})
+          ${kubenix.kubectl} apply -f <(kubenix.writeYaml ${k8s.grafana})
+          echo "✅ Stack deployed"
+        '';
+
+        destroyApp = pkgs.writeShellScriptBin "destroy" ''
+          echo "🧹 Destroying observability stack..."
+          ${kubenix.kubectl} delete deployment otel-collector || true
+          ${kubenix.kubectl} delete deployment jaeger-all-in-one || true
+          ${kubenix.kubectl} delete deployment prometheus || true
+          ${kubenix.kubectl} delete deployment grafana || true
+          echo "✅ Stack destroyed"
+        '';
+      }
+    );
 }
