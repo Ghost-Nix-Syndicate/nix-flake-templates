@@ -10,6 +10,11 @@
         description = "A very basic flake";
       };
 
+      devshell = {
+        path = ./devshell;
+        description = "A basic flake providing a devShell";
+      };
+
       simpleContainer = {
         path = ./simple-container;
         description = "A NixOS container running apache-httpd";
@@ -42,7 +47,7 @@
 
       ruby = {
         path = ./ruby;
-        description = "Flake for building ruby gems" ;
+        description = "Flake for building ruby gems";
         welcomeText = ''
           # Simple Ruby Gem Template
           ## Intended usage
@@ -67,6 +72,11 @@
       haskell-hello = {
         path = ./haskell-hello;
         description = "A Hello World in Haskell with one dependency";
+      };
+
+      haskell-simple-package = {
+        path = ./haskell-simple-package;
+        description = "A Haskell package with a library, executable and test suite";
       };
 
       hercules-ci = {
